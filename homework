@@ -1,0 +1,1233 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+import random
+import datetime
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+import matplotlib as mpl
+import matplotlib.font_manager as fm
+from matplotlib.ticker import MaxNLocator
+
+# ===== 统一的中文字体设置 =====
+try:
+    # Windows系统字体路径
+    font_path = 'C:/Windows/Fonts/simhei.ttf'  # 黑体
+    chinese_font_prop = fm.FontProperties(fname=font_path)
+
+    # 设置全局字体
+    plt.rcParams['font.family'] = chinese_font_prop.get_name()
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    mpl.rcParams['font.family'] = chinese_font_prop.get_name()
+except Exception as e:
+    print(f"字体设置错误: {e}")
+    # 回退方案
+    plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei']
+    plt.rcParams['axes.unicode_minus'] = False
+    chinese_font_prop = fm.FontProperties(family=['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei'])
+
+
+# ===============================
+
+class SupplyChainGame:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("口罩供应链模拟（经销商版）")
+        self.root.geometry("1300x900")  # 增加高度以容纳更大的图表
+        self.root.resizable(True, True)
+
+        # 保存中文字体引用
+        self.chinese_font = chinese_font_prop
+        self.ui_font = ("SimHei", 10)  # 用于UI控件的字体
+
+        # 设置UI主题
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        self.style.configure(".", background="#f5f9fc", font=self.ui_font)
+        self.style.configure("TFrame", background="#f5f9fc")
+        self.style.configure("TLabel", background="#f5f9fc", font=self.ui_font)
+        self.style.configure("TButton", font=self.ui_font, padding=5)
+        self.style.map("TButton",
+                       background=[('active', '#4a9fe9'), ('!active', '#2c7bc6')],
+                       foreground=[('active', 'white'), ('!active', 'white')])
+
+        # 游戏状态
+        self.day = 1
+        self.total_days = 7  # 修改：总天数改为7天
+        self.money = 100000
+        self.total_profit = 0
+        self.reputation = 50  # 声誉值 (0-100)
+
+        # 库存
+        self.inventory = 0  # 成品口罩库存
+        self.avg_cost = 0.0  # 移动平均成本
+
+        # 市场参数
+        self.base_demand = 5000
+        self.market_price = 1.5  # 市场基础价格
+        self.purchase_cost = 1.0  # 统一的采购成本（包含批发价概念）
+        self.supply = 4000  # 市场总供应量
+
+        # 供应链参数
+        self.supplier_reliability = 80  # 供应商可靠性 (0-100)
+        self.logistics_efficiency = 75  # 物流效率 (0-100)
+        self.supplier_relationship = 50  # 供应商关系 (0-100)
+
+        # 历史记录
+        self.sales_history = []
+        self.profit_history = []
+        self.reputation_history = []
+        self.market_share = []  # 市场份额 (0-1)
+        self.events_history = []
+        self.market_price_history = []  # 市场价格历史
+        self.market_demand_history = []  # 市场需求历史
+        self.market_supply_history = []  # 市场供应历史
+        self.inventory_history = []
+
+        # 市场动态
+        self.market_volatility = 30  # 市场波动性 (0-100)
+        self.competition_level = 40  # 竞争水平 (0-100)
+
+        # 政府相关参数
+        self.price_cap = None  # 限价政策
+        self.subsidy_rate = 0  # 经营补贴率
+        self.interception_prob = 0.15  # 货物拦截概率
+        self.interception_history = []  # 记录拦截历史
+
+        # 疫情阶段 (0: 疫情前, 1: 疫情初期, 2: 疫情中后期)
+        self.epidemic_phase = 1
+
+        # 创建UI
+        self.create_widgets()
+
+        # 开始游戏
+        self.start_new_day()
+
+    def create_widgets(self):
+        # 创建主框架
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 顶部标题
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(header_frame, text="口罩供应链模拟（经销商版）",
+                  font=("SimHei", 16, "bold"),
+                  foreground="#1a3c6c").pack(pady=10)
+
+        # 主内容区
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 左侧面板 - 供应链管理
+        left_frame = ttk.LabelFrame(content_frame, text="供应链管理", padding=10, width=400)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=5, pady=5)
+
+        # 供应链状态面板
+        status_frame = ttk.LabelFrame(left_frame, text="当前状态", padding=10)
+        status_frame.pack(fill=tk.X, pady=5)
+
+        status_grid = ttk.Frame(status_frame)
+        status_grid.pack(fill=tk.X)
+
+        # 游戏状态
+        status_labels = [
+            ("天数:", f"{self.day}/{self.total_days}"),
+            ("资金:", f"¥{self.money:,.2f}"),
+            ("总利润:", f"¥{self.total_profit:,.2f}"),
+            ("声誉值:", f"{self.reputation}/100"),
+            ("库存:", f"{self.inventory}只"),
+            ("市场份额:", f"{self.market_share[-1] * 100:.1f}%" if self.market_share else "0.0%")
+        ]
+
+        for i, (label, value) in enumerate(status_labels):
+            ttk.Label(status_grid, text=label, font=("SimHei", 10, "bold"),
+                      width=10, anchor=tk.W).grid(row=i, column=0, sticky=tk.W, padx=5, pady=2)
+            ttk.Label(status_grid, text=value, font=("SimHei", 10),
+                      width=15, anchor=tk.W).grid(row=i, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # 保存状态变量
+        self.day_label = status_grid.grid_slaves(row=0, column=1)[0]
+        self.money_label = status_grid.grid_slaves(row=1, column=1)[0]
+        self.profit_label = status_grid.grid_slaves(row=2, column=1)[0]
+        self.reputation_label = status_grid.grid_slaves(row=3, column=1)[0]
+        self.inventory_label = status_grid.grid_slaves(row=4, column=1)[0]
+        self.market_share_label = status_grid.grid_slaves(row=5, column=1)[0]
+
+        # 政府政策显示
+        policy_frame = ttk.LabelFrame(left_frame, text="政府政策", padding=10)
+        policy_frame.pack(fill=tk.X, pady=5)
+
+        policy_labels = [
+            ("限价政策:", "无"),
+            ("经营补贴:", "0%"),
+            ("拦截概率:", "15%")
+        ]
+
+        self.policy_vars = []
+        policy_grid = ttk.Frame(policy_frame)
+        policy_grid.pack(fill=tk.X)
+
+        for i, (label, value) in enumerate(policy_labels):
+            ttk.Label(policy_grid, text=label, font=("SimHei", 10, "bold"),
+                      width=10, anchor=tk.W).grid(row=i, column=0, sticky=tk.W, padx=5, pady=2)
+            var = tk.StringVar(value=value)
+            self.policy_vars.append(var)
+            ttk.Label(policy_grid, textvariable=var, font=("SimHei", 10),
+                      width=15, anchor=tk.W).grid(row=i, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # 供应链决策面板
+        decision_frame = ttk.LabelFrame(left_frame, text="供应链决策", padding=10)
+        decision_frame.pack(fill=tk.X, pady=5)
+
+        # 采购决策
+        purchase_frame = ttk.Frame(decision_frame)
+        purchase_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(purchase_frame, text="采购数量:").pack(side=tk.LEFT, padx=5)
+        self.purchase_var = tk.IntVar(value=0)
+        self.purchase_entry = ttk.Entry(purchase_frame, textvariable=self.purchase_var, width=10)
+        self.purchase_entry.pack(side=tk.LEFT, padx=5)
+
+        # 显示采购成本
+        self.purchase_price_var = tk.StringVar(value=f"采购价(含批发): ¥{self.purchase_cost:.2f}/只")
+        ttk.Label(purchase_frame, textvariable=self.purchase_price_var).pack(side=tk.LEFT, padx=10)
+
+        # 销售决策
+        sales_frame = ttk.Frame(decision_frame)
+        sales_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(sales_frame, text="零售价格:").pack(side=tk.LEFT, padx=5)
+        self.retail_price_var = tk.DoubleVar(value=self.market_price)
+        self.retail_price_entry = ttk.Entry(sales_frame, textvariable=self.retail_price_var, width=10)
+        self.retail_price_entry.pack(side=tk.LEFT, padx=5)
+
+        # 销售数量决策
+        sales_qty_frame = ttk.Frame(decision_frame)
+        sales_qty_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(sales_qty_frame, text="销售数量:").pack(side=tk.LEFT, padx=5)
+        self.sales_qty_var = tk.IntVar(value=0)
+        self.sales_qty_entry = ttk.Entry(sales_qty_frame, textvariable=self.sales_qty_var, width=10)
+        self.sales_qty_entry.pack(side=tk.LEFT, padx=5)
+
+        # 供应链优化按钮
+        optimize_frame = ttk.Frame(decision_frame)
+        optimize_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(optimize_frame, text="改善供应商关系",
+                   command=lambda: self.invest_in_supply_chain("supplier")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(optimize_frame, text="优化物流",
+                   command=lambda: self.invest_in_supply_chain("logistics")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(optimize_frame, text="市场营销活动",
+                   command=lambda: self.invest_in_supply_chain("marketing")).pack(side=tk.LEFT, padx=5)
+
+        # 提交按钮
+        button_frame = ttk.Frame(left_frame)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        self.submit_btn = ttk.Button(button_frame, text="执行决策", command=self.submit_decision,
+                                     style="Accent.TButton")
+        self.submit_btn.pack(pady=10, fill=tk.X)
+
+        # 创建特殊样式用于提交按钮
+        self.style.configure("Accent.TButton", font=("SimHei", 11, "bold"), background="#27ae60",
+                             foreground="white")
+        self.style.map("Accent.TButton",
+                       background=[('active', '#2ecc71'), ('!active', '#27ae60')],
+                       foreground=[('active', 'white'), ('!active', 'white')])
+
+        # 右侧面板 - 市场分析
+        right_frame = ttk.Frame(content_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, pady=5, expand=True)
+
+        # 市场动态面板
+        market_frame = ttk.LabelFrame(right_frame, text="市场动态", padding=10)
+        market_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # 创建市场图表容器
+        notebook = ttk.Notebook(market_frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        # 玩家表现标签页
+        player_tab = ttk.Frame(notebook)
+        notebook.add(player_tab, text="玩家表现")
+
+        self.fig1, self.ax1 = plt.subplots(figsize=(9, 5.5))
+        self.fig1.set_facecolor('#f5f9fc')
+        self.ax1.set_facecolor('#f0f5fa')
+
+        self.canvas1 = FigureCanvasTkAgg(self.fig1, master=player_tab)
+        self.canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 市场供需标签页
+        market_tab = ttk.Frame(notebook)
+        notebook.add(market_tab, text="市场供需")
+
+        self.fig2, self.ax2 = plt.subplots(figsize=(9, 5.5))
+        self.fig2.set_facecolor('#f5f9fc')
+        self.ax2.set_facecolor('#f0f5fa')
+
+        self.canvas2 = FigureCanvasTkAgg(self.fig2, master=market_tab)
+        self.canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 事件日志面板
+        log_frame = ttk.LabelFrame(right_frame, text="事件日志", padding=10)
+        log_frame.pack(fill=tk.BOTH, pady=5)
+
+        self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=10, font=("SimHei", 9))
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.log_text.config(state=tk.DISABLED)
+
+        # 添加初始日志
+        self.add_log("游戏开始! 疫情爆发，口罩需求激增")
+        self.add_log(f"初始资金: ¥{self.money:,.2f}")
+        self.add_log("您扮演的是口罩经销商，负责采购和销售")
+        self.add_log("政府可能干预市场，请注意政策变化")
+
+    def update_purchase_price(self):
+        """更新统一的采购价格（含批发价概念）- 确保不低于0.5元"""
+        # 基础价格受市场影响
+        base_price = self.purchase_cost * (1.0 + (self.market_volatility / 200))
+
+        # 供应商关系影响价格 (0.85-1.15)
+        relationship_factor = max(0.85, min(1.15, 1.0 - (self.supplier_relationship / 250)))
+
+        # 物流效率影响 (0.9-1.1)
+        logistics_factor = max(0.9, min(1.1, 1.0 - (self.logistics_efficiency / 350)))
+
+        # 供需影响
+        demand_supply_ratio = self.base_demand / max(1, self.supply)
+        if demand_supply_ratio > 1.1:
+            ds_factor = 1.05
+        elif demand_supply_ratio < 0.9:
+            ds_factor = 0.95
+        else:
+            ds_factor = 1.0
+
+        # 计算最终采购价格
+        new_price = base_price * relationship_factor * logistics_factor * ds_factor
+
+        # 设定采购价最低限制 (0.5元)和最高限制(不超过市场价的90%)
+        min_price = 0.5
+        max_price = self.market_price * 0.9 if self.market_price > min_price else min_price * 1.5
+
+        # 限制价格范围并确保不会一直下降
+        self.purchase_cost = max(min_price, min(max_price, new_price))
+
+        # 更新UI显示
+        self.purchase_price_var.set(f"采购价(含批发): ¥{self.purchase_cost:.2f}/只")
+
+    def add_log(self, message):
+        """添加消息到日志"""
+        self.log_text.config(state=tk.NORMAL)
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.log_text.see(tk.END)  # 滚动到底部
+        self.log_text.config(state=tk.DISABLED)
+
+    def update_player_chart(self):
+        """更新玩家表现图表"""
+        self.ax1.clear()
+
+        # 设置中文标题和标签
+        if self.chinese_font:
+            self.ax1.set_title('经销商表现分析', fontproperties=self.chinese_font)
+            self.ax1.set_xlabel('天数', fontproperties=self.chinese_font)
+            self.ax1.set_ylabel('销售量 (只)', color='#3498db', fontproperties=self.chinese_font)
+
+        if not self.sales_history:
+            if self.chinese_font:
+                self.ax1.text(0.5, 0.5, "等待市场数据...",
+                              ha='center', va='center', fontsize=12, color='gray',
+                              fontproperties=self.chinese_font)
+            else:
+                self.ax1.text(0.5, 0.5, "等待市场数据...",
+                              ha='center', va='center', fontsize=12, color='gray')
+            self.canvas1.draw()
+            return
+
+        days = list(range(1, len(self.sales_history) + 1))
+
+        # 设置最大刻度数，防止重叠
+        self.ax1.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=min(15, len(days))))
+
+        # 创建双Y轴图表
+        ax1 = self.ax1
+        ax2 = ax1.twinx()
+
+        # 销售数据
+        ax1.plot(days, self.sales_history, 'o-', color='#3498db', label='销售量', linewidth=2, markersize=6)
+        ax1.set_xlabel('天数', fontsize=11)
+        ax1.set_ylabel('销售量 (只)', color='#3498db', fontsize=11)
+        ax1.tick_params(axis='y', labelcolor='#3498db')
+        ax1.grid(True, linestyle='--', alpha=0.5)
+
+        # 库存数据
+        if self.inventory_history:
+            ax1.plot(days, self.inventory_history, 'd-', color='#9b59b6', label='库存量', linewidth=2, markersize=6)
+
+        # 设置左侧Y轴范围
+        all_left_data = self.sales_history + self.inventory_history
+        if all_left_data:
+            ax1.set_ylim(0, max(all_left_data) * 1.2)
+
+        # 利润数据
+        ax2.plot(days, self.profit_history, 's-', color='#27ae60', label='利润', linewidth=2, markersize=6)
+        ax2.set_ylabel('利润 (元)', color='#27ae60', fontsize=11)
+        ax2.tick_params(axis='y', labelcolor='#27ae60')
+        ax2.grid(True, linestyle=':', alpha=0.3)
+
+        # 设置右侧Y轴范围
+        if self.profit_history:
+            profit_min = min(self.profit_history)
+            profit_max = max(self.profit_history)
+            ax2_range = max(abs(profit_min), abs(profit_max)) * 1.2
+            ax2.set_ylim(-ax2_range, ax2_range)
+
+        # 添加图例
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+
+        if self.chinese_font:
+            ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left',
+                       bbox_to_anchor=(1.05, 1), fontsize=9, prop=self.chinese_font)
+        else:
+            ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left',
+                       bbox_to_anchor=(1.05, 1), fontsize=9)
+
+        # 设置标题
+        if self.chinese_font:
+            ax1.set_title('经销商表现分析', fontsize=13, pad=15, fontproperties=self.chinese_font)
+        else:
+            ax1.set_title('经销商表现分析', fontsize=13, pad=15)
+
+        # 调整布局
+        self.fig1.tight_layout(rect=[0, 0, 0.85, 1])
+        self.canvas1.draw()
+
+    def update_market_chart(self):
+        """更新市场供需图表 - 根据三张图片实现不同的供需曲线"""
+        self.ax2.clear()
+
+        # 设置图表基础属性
+        if self.chinese_font:
+            self.ax2.set_xlabel('数量 Q (只)', fontsize=11, fontproperties=self.chinese_font)
+            self.ax2.set_ylabel('价格 P (元)', fontsize=11, fontproperties=self.chinese_font)
+        else:
+            self.ax2.set_xlabel('Quantity Q (units)', fontsize=11)
+            self.ax2.set_ylabel('Price P (yuan)', fontsize=11)
+
+        self.ax2.grid(True, linestyle='--', alpha=0.3)
+        self.ax2.set_xlim(0, 10000)
+        self.ax2.set_ylim(0, 5)
+
+        if self.epidemic_phase == 0:  # 疫情前 (图1)
+            # 需求曲线: P = 4.0 - 0.0005Q
+            q_demand = np.linspace(0, 8000, 100)
+            p_demand = 4.0 - 0.0005 * q_demand
+
+            # 供给曲线: P = 1.0 + 0.0005Q
+            q_supply = np.linspace(0, 8000, 100)
+            p_supply = 1.0 + 0.0005 * q_supply
+
+            # 均衡点M0 (Q0=3000, P0=2.5)
+            eq_q = 3000
+            eq_p = 2.5
+
+            # 绘制曲线
+            self.ax2.plot(q_demand, p_demand, 'b-', label='需求曲线 D', linewidth=2)
+            self.ax2.plot(q_supply, p_supply, 'r-', label='供给曲线 S', linewidth=2)
+
+            # 标记均衡点M
+            self.ax2.plot(eq_q, eq_p, 'go', markersize=8, label='均衡点 M0')
+
+            # 标注Q0和P0
+            self.ax2.plot([0, eq_q], [eq_p, eq_p], 'g--', alpha=0.5)
+            self.ax2.plot([eq_q, eq_q], [0, eq_p], 'g--', alpha=0.5)
+
+            if self.chinese_font:
+                self.ax2.annotate(f'P0={eq_p:.2f}', (0, eq_p), xytext=(-30, eq_p + 0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+                self.ax2.annotate(f'Q0={eq_q}', (eq_q, 0), xytext=(eq_q - 300, -0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+            else:
+                self.ax2.annotate(f'P0={eq_p:.2f}', (0, eq_p), xytext=(-30, eq_p + 0.2), fontsize=10)
+                self.ax2.annotate(f'Q0={eq_q}', (eq_q, 0), xytext=(eq_q - 300, -0.2), fontsize=10)
+
+            # 设置标题
+            if self.chinese_font:
+                self.ax2.set_title('图1: 疫情前市场供需曲线', fontsize=13, pad=15, fontproperties=self.chinese_font)
+            else:
+                self.ax2.set_title('Figure 1: Supply-Demand Curve (Pre-Epidemic)', fontsize=13, pad=15)
+
+        elif self.epidemic_phase == 1:  # 疫情初期 (图2无价格管制)
+            # 原始需求曲线 (虚线表示)
+            q_demand0 = np.linspace(0, 8000, 100)
+            p_demand0 = 4.0 - 0.0005 * q_demand0
+
+            # 新需求曲线 D1 - 右移
+            q_demand1 = np.linspace(0, 10000, 100)
+            p_demand1 = 5.0 - 0.0004 * q_demand1
+
+            # 供给曲线 S (保持不变)
+            q_supply = np.linspace(0, 8000, 100)
+            p_supply = 1.0 + 0.0005 * q_supply
+
+            # 原始均衡点M0 (Q0=3000, P0=2.5)
+            eq_q0 = 3000
+            eq_p0 = 2.5
+
+            # 新均衡点M1 (Q1≈4444, P1≈3.22)
+            eq_q1 = 4444
+            eq_p1 = 3.22
+
+            # 绘制曲线
+            self.ax2.plot(q_demand0, p_demand0, 'b--', label='原始需求曲线 D', linewidth=2, alpha=0.5)
+            self.ax2.plot(q_demand1, p_demand1, 'b-', label='新需求曲线 D1', linewidth=2)
+            self.ax2.plot(q_supply, p_supply, 'r-', label='供给曲线 S', linewidth=2)
+
+            # 标记原始均衡点M0
+            self.ax2.plot(eq_q0, eq_p0, 'co', markersize=8, label='原始均衡点 M0')
+
+            # 标注Q0和P0
+            self.ax2.plot([0, eq_q0], [eq_p0, eq_p0], 'c--', alpha=0.5)
+            self.ax2.plot([eq_q0, eq_q0], [0, eq_p0], 'c--', alpha=0.5)
+
+            if self.chinese_font:
+                self.ax2.annotate(f'P0={eq_p0:.2f}', (0, eq_p0), xytext=(-30, eq_p0 + 0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+                self.ax2.annotate(f'Q0={eq_q0}', (eq_q0, 0), xytext=(eq_q0 - 300, -0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+
+            # 标记新均衡点M1
+            self.ax2.plot(eq_q1, eq_p1, 'go', markersize=8, label='新均衡点 M1')
+
+            # 标注Q1和P1
+            self.ax2.plot([0, eq_q1], [eq_p1, eq_p1], 'g--', alpha=0.5)
+            self.ax2.plot([eq_q1, eq_q1], [0, eq_p1], 'g--', alpha=0.5)
+
+            if self.chinese_font:
+                self.ax2.annotate(f'P1={eq_p1:.2f}', (0, eq_p1), xytext=(-30, eq_p1 + 0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+                self.ax2.annotate(f'Q1={eq_q1:.0f}', (eq_q1, 0), xytext=(eq_q1 - 300, -0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+
+            # 设置标题
+            if self.chinese_font:
+                self.ax2.set_title('图2: 疫情初期市场供需曲线 (无价格管制)', fontsize=13, pad=15,
+                                   fontproperties=self.chinese_font)
+            else:
+                self.ax2.set_title('Figure 2: Supply-Demand Curve (Early Epidemic, No Price Controls)', fontsize=13,
+                                   pad=15)
+
+        elif self.epidemic_phase == 2:  # 疫情中后期 (图3有价格管制)
+            # 需求曲线 D1 (右移后的曲线)
+            q_demand = np.linspace(0, 12000, 100)
+            p_demand = 5.0 - 0.0004 * q_demand
+
+            # 供给曲线 S (略有上移)
+            q_supply = np.linspace(0, 9000, 100)
+            p_supply = 1.5 + 0.0004 * q_supply
+
+            # 无价格管制的均衡点M1 (Q1=6250, P1=2.5)
+            eq_q1 = 6250
+            eq_p1 = 2.5
+
+            # 价格管制点 (P^A = 3.0)
+            price_cap = 3.0  # 修改：政府限价固定为3.0元
+
+            # 计算价格管制点下的供给量QS和需求量QD
+            q_cap_supply = max(0, (price_cap - 1.5) / 0.0004)
+            q_cap_demand = max(0, (5.0 - price_cap) / 0.0004)
+
+            # 短缺量
+            shortage = q_cap_demand - q_cap_supply
+
+            # 绘制曲线
+            self.ax2.plot(q_demand, p_demand, 'b-', label='需求曲线 D1', linewidth=2)
+            self.ax2.plot(q_supply, p_supply, 'r-', label='供给曲线 S', linewidth=2)
+
+            # 标记原始均衡点M0
+            self.ax2.plot(3000, 2.5, 'co', markersize=6, label='原始均衡点 M0', alpha=0.7)
+
+            # 标注M0点
+            if self.chinese_font:
+                self.ax2.annotate('M0', (3000, 2.5), xytext=(3000 - 800, 2.5 - 0.3), fontsize=10,
+                                  fontproperties=self.chinese_font, alpha=0.7)
+
+            # 标记无价格管制均衡点M1
+            self.ax2.plot(eq_q1, eq_p1, 'go', markersize=8, label='无管制均衡点 M1')
+            if self.chinese_font:
+                self.ax2.annotate('M1', (eq_q1, eq_p1),
+                                  xytext=(eq_q1 + 600, eq_p1 + 0.2), fontsize=10,
+                                  fontproperties=self.chinese_font,
+                                  arrowprops=dict(arrowstyle='->', color='black'))
+            else:
+                self.ax2.annotate('M1', (eq_q1, eq_p1),
+                                  xytext=(eq_q1 + 600, eq_p1 + 0.2), fontsize=10,
+                                  arrowprops=dict(arrowstyle='->', color='black'))
+
+            # 绘制价格管制线（3.0元）
+            self.ax2.axhline(y=price_cap, color='purple', linestyle='--', linewidth=2, label='政府限价 P^A=3.0')
+
+            # 标注限价
+            if self.chinese_font:
+                self.ax2.annotate('P^A=3.0', (0, price_cap), xytext=(-30, price_cap + 0.2),
+                                  fontsize=10, fontproperties=self.chinese_font)
+            else:
+                self.ax2.annotate('Price Cap=3.0', (0, price_cap), xytext=(-30, price_cap + 0.2), fontsize=10)
+
+            # 绘制垂直线表示供给量和需求量
+            self.ax2.plot([q_cap_supply, q_cap_supply], [0, price_cap], 'k--', alpha=0.5)
+            self.ax2.plot([q_cap_demand, q_cap_demand], [0, price_cap], 'k--', alpha=0.5)
+
+            # 标记Q_s和Q_d
+            if self.chinese_font:
+                # 标记供给量Q_s
+                self.ax2.annotate(f'Q_s={int(q_cap_supply)}', (q_cap_supply, price_cap / 2),
+                                  xytext=(q_cap_supply - 800, price_cap / 2 + 0.2), fontsize=9,
+                                  fontproperties=self.chinese_font)
+
+                # 标记需求量Q_d
+                self.ax2.annotate(f'Q_d={int(q_cap_demand)}', (q_cap_demand, price_cap / 2),
+                                  xytext=(q_cap_demand - 500, price_cap / 2 - 0.5), fontsize=9,
+                                  fontproperties=self.chinese_font)
+
+                # 标记短缺区域
+                self.ax2.annotate(f'短缺量: {int(shortage)}只',
+                                  ((q_cap_demand + q_cap_supply) / 2, price_cap / 2 - 0.3),
+                                  fontsize=11, color='red', weight='bold',
+                                  fontproperties=self.chinese_font)
+
+                # 绘制箭头表示短缺
+                self.ax2.annotate('',
+                                  xy=(q_cap_supply, price_cap - 0.1),
+                                  xytext=(q_cap_demand, price_cap - 0.1),
+                                  arrowprops=dict(arrowstyle='<->', color='red', linewidth=1.5))
+            else:
+                # 标记供给量Q_s
+                self.ax2.annotate(f'Q_s={int(q_cap_supply)}', (q_cap_supply, price_cap / 2),
+                                  xytext=(q_cap_supply - 800, price_cap / 2 + 0.2), fontsize=9)
+
+                # 标记需求量Q_d
+                self.ax2.annotate(f'Q_d={int(q_cap_demand)}', (q_cap_demand, price_cap / 2),
+                                  xytext=(q_cap_demand - 500, price_cap / 2 - 0.5), fontsize=9)
+
+                # 标记短缺区域
+                self.ax2.annotate(f'Shortage: {int(shortage)} units',
+                                  ((q_cap_demand + q_cap_supply) / 2, price_cap / 2 - 0.3),
+                                  fontsize=11, color='red', weight='bold')
+
+                # 绘制箭头表示短缺
+                self.ax2.annotate('',
+                                  xy=(q_cap_supply, price_cap - 0.1),
+                                  xytext=(q_cap_demand, price_cap - 0.1),
+                                  arrowprops=dict(arrowstyle='<->', color='red', linewidth=1.5))
+
+            # 设置标题
+            if self.chinese_font:
+                self.ax2.set_title('图3: 疫情中后期市场供需曲线 (含价格管制)', fontsize=13, pad=15,
+                                   fontproperties=self.chinese_font)
+            else:
+                self.ax2.set_title('Figure 3: Supply-Demand Curve (Mid-Late Epidemic, With Price Controls)',
+                                   fontsize=13, pad=15)
+
+        # 添加图例
+        if self.chinese_font:
+            self.ax2.legend(loc='upper left', bbox_to_anchor=(1.05, 1), fontsize=9, prop=self.chinese_font)
+        else:
+            self.ax2.legend(loc='upper left', bbox_to_anchor=(1.05, 1), fontsize=9)
+
+        # 调整布局
+        self.fig2.tight_layout(rect=[0, 0, 0.85, 1])
+        self.canvas2.draw()
+
+    def generate_events(self):
+        """生成随机事件"""
+        events = []
+
+        # 疫情阶段变化
+        if self.day == 3 and self.epidemic_phase == 1:  # 修改：第3天进入中后期
+            self.epidemic_phase = 2
+            # 强制设置限价为3.0元
+            self.price_cap = 3.0
+            event = "进入疫情中后期! 政府实施限价政策，最高零售价不得超过¥3.0元"
+            events.append(event)
+            self.add_log(event)
+            self.policy_vars[0].set(f"¥{self.price_cap}")
+            self.update_market_chart()
+
+        # 市场事件
+        if random.random() < 0.5:
+            event_type = random.choice(["demand", "supply", "price", "competition"])
+            if event_type == "demand":
+                change_percent = random.uniform(0.1, 0.3)
+                if random.choice([True, False]):
+                    self.base_demand = int(self.base_demand * (1 + change_percent))
+                    event = f"需求激增! 市场基础需求增加{change_percent * 100:.0f}%"
+                else:
+                    self.base_demand = max(1000, int(self.base_demand * (1 - change_percent)))
+                    event = f"需求下降! 市场基础需求减少{change_percent * 100:.0f}%"
+                events.append(event)
+                self.add_log(event)
+
+            elif event_type == "supply":
+                change_percent = random.uniform(0.1, 0.25)
+                if random.choice([True, False]):
+                    self.supply = int(self.supply * (1 + change_percent))
+                    event = f"供应增加! 市场总供应增加{change_percent * 100:.0f}%"
+                else:
+                    self.supply = max(2000, int(self.supply * (1 - change_percent)))
+                    event = f"供应减少! 市场总供应减少{change_percent * 100:.0f}%"
+                events.append(event)
+                self.add_log(event)
+
+            elif event_type == "price":
+                demand_supply_ratio = self.base_demand / max(1, self.supply)
+
+                if demand_supply_ratio > 1.2:
+                    change = random.uniform(0.1, 0.4)
+                    self.market_price += change
+                    self.purchase_cost += change * 0.5
+                    event = f"供不应求! 价格上涨至¥{self.market_price:.2f}/只"
+                elif demand_supply_ratio < 0.8:
+                    change = random.uniform(0.1, 0.3)
+                    self.market_price = max(0.8, self.market_price - change)
+                    self.purchase_cost = max(0.5, self.purchase_cost - change * 0.5)  # 采购价不低于0.5元
+                    event = f"供过于求! 价格下跌至¥{self.market_price:.2f}/只"
+                else:
+                    change = random.uniform(-0.1, 0.15)
+                    if change > 0:
+                        self.market_price += change
+                        self.purchase_cost += change * 0.5
+                        event = f"市场平稳! 价格小幅上涨至¥{self.market_price:.2f}/只"
+                    else:
+                        self.market_price = max(0.8, self.market_price + change)  # change is negative
+                        self.purchase_cost = max(0.5, self.purchase_cost + change * 0.5)  # 采购价不低于0.5元
+                        event = f"市场平稳! 价格小幅下跌至¥{self.market_price:.2f}/只"
+
+                events.append(event)
+                self.retail_price_var.set(round(self.market_price, 2))
+                self.add_log(event)
+
+            elif event_type == "competition":
+                change = random.randint(5, 15)
+                if random.choice([True, False]):
+                    self.competition_level = min(100, self.competition_level + change)
+                    event = f"新竞争者进入! 竞争水平上升{change}点"
+                else:
+                    self.competition_level = max(0, self.competition_level - change)
+                    event = f"竞争对手退出! 竞争水平下降{change}点"
+                events.append(event)
+                self.add_log(event)
+
+        # 供应链事件
+        if random.random() < 0.3:
+            event_type = random.choice(["supplier", "logistics"])
+            if event_type == "supplier":
+                change = random.randint(5, 15)
+                if random.choice([True, False]):
+                    self.supplier_reliability = min(100, self.supplier_reliability + change)
+                    event = f"供应商关系改善! 可靠性上升{change}点"
+                else:
+                    self.supplier_reliability = max(10, self.supplier_reliability - change)
+                    event = f"供应商问题! 可靠性下降{change}点"
+                events.append(event)
+                self.add_log(event)
+
+            elif event_type == "logistics":
+                change = random.randint(5, 15)
+                if random.choice([True, False]):
+                    self.logistics_efficiency = min(100, self.logistics_efficiency + change)
+                    event = f"物流效率提升! 运输成本降低{change}点"
+                else:
+                    self.logistics_efficiency = max(20, self.logistics_efficiency - change)
+                    event = f"物流问题! 运输成本上升{change}点"
+                events.append(event)
+                self.add_log(event)
+
+        # 政府政策事件
+        if random.random() < 0.35:
+            policy_type = random.choice(["price_cap", "subsidy", "interception"])
+
+            if policy_type == "price_cap":
+                # 固定设置限价为3.0元，不再随机
+                self.price_cap = 3.0
+                event = f"政府实施最高限价! 零售价不能超过¥{self.price_cap}"
+                events.append(event)
+                self.add_log(event)
+                self.policy_vars[0].set(f"¥{self.price_cap}")
+
+            elif policy_type == "subsidy":
+                self.subsidy_rate = random.randint(5, 20)
+                event = f"政府提供经营补贴! 收入增加{self.subsidy_rate}%"
+                events.append(event)
+                self.add_log(event)
+                self.policy_vars[1].set(f"{self.subsidy_rate}%")
+
+            elif policy_type == "interception":
+                change = random.uniform(-0.1, 0.15)
+                new_prob = max(0.05, min(0.4, self.interception_prob + change))
+
+                if new_prob > self.interception_prob:
+                    event = f"政府加强监管! 货物拦截概率上升至{new_prob * 100:.1f}%"
+                else:
+                    event = f"政府放松监管! 货物拦截概率下降至{new_prob * 100:.1f}%"
+
+                self.interception_prob = new_prob
+                events.append(event)
+                self.add_log(event)
+                self.policy_vars[2].set(f"{self.interception_prob * 100:.1f}%")
+
+        # 更新采购价格
+        self.update_purchase_price()
+
+        return events
+
+    def calculate_demand(self, retail_price):
+        """计算市场需求 - 修复未定义变量错误"""
+        base = self.base_demand
+        reputation_factor = self.reputation / 100
+        price_sensitivity = 1.8 - reputation_factor * 0.8
+        price_elasticity = max(0.3, price_sensitivity - (retail_price - 1.0) * 1.5)
+        reputation_demand_boost = 1.0 + (reputation_factor * 0.5)
+        volatility = self.market_volatility / 100
+        fluctuation = random.uniform(1 - volatility / 2, 1 + volatility / 2)
+
+        # 修复未定义的competition_factor
+        competition_factor = 1.0 - (self.competition_level / 200)
+
+        demand = base * price_elasticity * reputation_demand_boost * fluctuation * competition_factor
+
+        # 记录市场数据
+        self.market_demand_history.append(int(demand))
+        self.market_price_history.append(self.market_price)
+        self.market_supply_history.append(self.supply)
+
+        return int(demand)
+
+    def calculate_market_share(self):
+        """计算市场份额 - 修复变量名称错误"""
+        base_share = 0.3
+        reputation_effect = (self.reputation - 50) / 100
+        # 修复变量名称错误
+        price_competitiveness = max(0.1, 1.5 - self.retail_price_var.get())
+        fluctuation = random.uniform(0.9, 1.1)
+        competition_effect = 1.0 - (self.competition_level / 150)
+
+        return max(0.05, min(0.95,
+                             base_share + reputation_effect * 0.2 + price_competitiveness * 0.1) * fluctuation * competition_effect)
+
+    def invest_in_supply_chain(self, area):
+        """投资供应链优化"""
+        if area == "supplier":
+            cost = 5000
+            improvement = random.randint(5, 15)
+            message = f"投资 ¥{cost} 改善供应商关系?\n预计采购价格降低{improvement}%"
+        elif area == "logistics":
+            cost = 6000
+            improvement = random.randint(5, 15)
+            message = f"投资 ¥{cost} 优化物流?\n预计采购成本降低{improvement}%"
+        elif area == "marketing":
+            cost = 7000
+            improvement = random.randint(5, 15)
+            message = f"投资 ¥{cost} 进行市场营销?\n预计声誉提升 {improvement} 点"
+        else:
+            return
+
+        if self.money < cost:
+            messagebox.showwarning("资金不足", f"需要 ¥{cost} 进行投资，但您只有 ¥{self.money}")
+            return
+
+        if messagebox.askyesno("供应链投资", message):
+            self.money -= cost
+
+            if area == "supplier":
+                self.supplier_relationship = min(100, self.supplier_relationship + improvement)
+                self.add_log(f"供应商关系改善! 采购价格预计降低 {improvement}%")
+            elif area == "logistics":
+                self.logistics_efficiency = min(100, self.logistics_efficiency + improvement)
+                self.add_log(f"物流优化成功! 采购成本预计降低 {improvement}%")
+            elif area == "marketing":
+                self.reputation = min(100, self.reputation + improvement)
+                self.add_log(f"市场营销成功! 声誉提升 {improvement} 点")
+
+            self.update_purchase_price()
+            self.update_status()
+
+    def start_new_day(self):
+        # 更新状态标签
+        self.update_status()
+
+        # 生成今日事件
+        events = self.generate_events()
+        self.events_history.append(events)
+
+        # 设置默认值
+        max_purchase = min(10000, int(self.money / self.purchase_cost))
+        self.purchase_var.set(min(10000, max_purchase))
+        self.sales_qty_var.set(min(self.inventory, int(self.inventory * 0.7)) if self.inventory > 0 else 0)
+
+        # 更新市场图表
+        self.update_player_chart()
+        self.update_market_chart()
+
+    def update_status(self):
+        """更新状态显示"""
+        self.day_label.config(text=f"{self.day}/{self.total_days}")
+        self.money_label.config(text=f"¥{self.money:,.2f}")
+        self.profit_label.config(text=f"¥{self.total_profit:,.2f}")
+        self.reputation_label.config(text=f"{self.reputation}/100")
+        self.inventory_label.config(text=f"{self.inventory}只")
+
+        # 计算市场份额
+        if self.market_share:
+            current_share = self.market_share[-1]
+            self.market_share_label.config(text=f"{current_share * 100:.1f}%")
+        else:
+            self.market_share_label.config(text="0.0%")
+
+        # 更新政策显示
+        if self.price_cap is not None:
+            self.policy_vars[0].set(f"¥{self.price_cap}")
+        else:
+            self.policy_vars[0].set("无")
+        self.policy_vars[1].set(f"{self.subsidy_rate}%")
+        self.policy_vars[2].set(f"{self.interception_prob * 100:.1f}%")
+
+    def government_interception(self):
+        """政府货物拦截"""
+        if self.inventory > 0 and random.random() < self.interception_prob:
+            # 随机拦截比例 (5% - 25%)
+            interception_rate = random.uniform(0.05, 0.25)
+            interception_qty = int(self.inventory * interception_rate)
+
+            if interception_qty > 0:
+                # 补偿价格 (成本价的60%-90%)
+                compensation_rate = random.uniform(0.6, 0.9)
+                compensation = interception_qty * self.avg_cost * compensation_rate
+
+                # 更新库存和资金
+                self.inventory -= interception_qty
+                self.money += compensation
+
+                # 记录拦截历史
+                self.interception_history.append((interception_qty, compensation))
+
+                # 添加日志
+                self.add_log(f"政府拦截了{interception_qty}只口罩! (库存的{interception_rate * 100:.1f}%)")
+                self.add_log(f"获得政府补偿: ¥{compensation:.2f} (成本价的{compensation_rate * 100:.0f}%)")
+
+                return True
+
+        return False
+
+    def submit_decision(self):
+        try:
+            # 获取决策值
+            purchase_qty = self.purchase_var.get()
+            retail_price = self.retail_price_var.get()
+            sales_qty = self.sales_qty_var.get()
+
+            # ========== 采购阶段 ==========
+            purchase_cost = purchase_qty * self.purchase_cost
+
+            # 检查资金是否足够
+            if purchase_cost > self.money:
+                messagebox.showerror("资金不足", f"采购需要 ¥{purchase_cost:.2f}, 但您只有 ¥{self.money}")
+                return
+
+            # 供应商可靠性影响
+            if random.random() < (1 - self.supplier_reliability / 100):
+                received = int(purchase_qty * random.uniform(0.7, 0.9))
+                self.add_log(f"供应商问题! 只收到 {received}/{purchase_qty} 只口罩")
+                purchase_qty = received
+
+            # 更新移动平均成本
+            if self.inventory + purchase_qty > 0:
+                self.avg_cost = ((self.inventory * self.avg_cost) + (purchase_qty * self.purchase_cost)) / (
+                        self.inventory + purchase_qty)
+
+            self.money -= purchase_cost
+            self.inventory += purchase_qty
+            self.add_log(f"采购口罩: {purchase_qty}只, 成本: ¥{purchase_cost:.2f}")
+
+            # ========== 政府拦截阶段 ==========
+            intercepted = self.government_interception()
+
+            # ========== 销售阶段 ==========
+            # 计算市场需求
+            demand = self.calculate_demand(retail_price)
+
+            # 检查政府限价并调整价格
+            if self.price_cap and retail_price > self.price_cap:
+                retail_price = self.price_cap
+                self.retail_price_var.set(retail_price)
+                self.add_log(f"政府限价! 零售价调整为 ¥{retail_price}")
+
+            # 实际销售数量受市场需求和决策限制
+            actual_sales = min(sales_qty, self.inventory, demand)
+
+            # 计算销售收入
+            sales_revenue = actual_sales * retail_price
+            # 扣减库存
+            self.inventory -= actual_sales
+            # 收入入账
+            self.money += sales_revenue
+
+            # 计算销售成本
+            cost_of_goods_sold = actual_sales * self.avg_cost
+
+            # 应用政府补贴
+            subsidy = 0
+            if self.subsidy_rate > 0:
+                subsidy = sales_revenue * (self.subsidy_rate / 100)
+                self.money += subsidy
+                self.add_log(f"获得政府补贴: ¥{subsidy:.2f}")
+
+            self.add_log(f"销售口罩: {actual_sales}只, 收入: ¥{sales_revenue:.2f}")
+
+            # 计算利润
+            profit = sales_revenue + subsidy - cost_of_goods_sold - purchase_cost
+            self.total_profit += profit
+            self.sales_history.append(actual_sales)
+            self.profit_history.append(profit)
+            self.reputation_history.append(self.reputation)
+            self.inventory_history.append(self.inventory)
+
+            # 更新市场份额
+            current_share = self.calculate_market_share()
+            self.market_share.append(current_share)
+
+            # 声誉变化
+            if profit > 0:
+                rep_change = random.randint(1, 3)
+                self.reputation = min(100, self.reputation + rep_change)
+            else:
+                rep_change = random.randint(-3, -1)
+                self.reputation = max(0, self.reputation + rep_change)
+
+            # 显示结果
+            result_message = f"第{self.day}天经营结果:\n"
+            result_message += f"总收入: ¥{sales_revenue + subsidy:,.2f}\n"
+            result_message += f"采购成本: ¥{purchase_cost:,.2f}\n"
+            result_message += f"销售成本: ¥{cost_of_goods_sold:,.2f}\n"
+            result_message += f"当日利润: ¥{profit:,.2f}\n"
+            result_message += f"声誉变化: {'+' if rep_change > 0 else ''}{rep_change}点\n"
+            result_message += f"市场份额: {current_share * 100:.1f}%"
+
+            messagebox.showinfo("经营结果", result_message)
+            self.add_log(f"第{self.day}天: 利润 ¥{profit:.2f}, 声誉 {self.reputation}/100")
+
+            # 进入下一天
+            self.day += 1
+
+            if self.day > self.total_days:
+                self.game_over()
+            else:
+                self.start_new_day()
+
+        except ValueError:
+            messagebox.showerror("输入错误", "请输入有效的数字")
+        except Exception as e:
+            messagebox.showerror("错误", f"发生错误: {str(e)}")
+
+    def game_over(self):
+        # 计算最终评级
+        if self.total_profit > 25000:
+            rating = "销售大师"
+            color = "#27ae60"
+        elif self.total_profit > 15000:
+            rating = "卓越经销商"
+            color = "#2ecc71"
+        elif self.total_profit > 0:
+            rating = "合格经营者"
+            color = "#f39c12"
+        else:
+            rating = "需提升销售管理"
+            color = "#e74c3c"
+
+        # 创建游戏结束分析报告
+        report = f"供应链模拟结束!\n\n"
+        report += f"经营天数: {self.total_days}\n"
+        report += f"最终资金: ¥{self.money:,.2f}\n"
+        report += f"总利润: ¥{self.total_profit:,.2f}\n"
+        report += f"最终声誉: {self.reputation}/100\n"
+        report += f"最终市场份额: {self.market_share[-1] * 100:.1f}%\n\n"
+        report += f"最终评级: {rating}"
+
+        # 创建自定义结果窗口
+        result_window = tk.Toplevel(self.root)
+        result_window.title("游戏结束")
+        result_window.geometry("500x400")
+        result_window.resizable(False, False)
+
+        # 添加标题
+        ttk.Label(result_window, text="销售模拟结束",
+                  font=("SimHei", 14, "bold"), foreground="#1a3c6c").pack(pady=10)
+
+        # 添加结果文本
+        result_frame = ttk.Frame(result_window)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # 添加关键指标
+        metrics = [
+            ("经营天数:", f"{self.total_days}天"),
+            ("最终资金:", f"¥{self.money:,.2f}"),
+            ("总利润:", f"¥{self.total_profit:,.2f}"),
+            ("最终声誉:", f"{self.reputation}/100"),
+            ("市场份额:", f"{self.market_share[-1] * 100:.1f}%"),
+            ("最终评级:", f"{rating}")
+        ]
+
+        for i, (label, value) in enumerate(metrics):
+            frame = ttk.Frame(result_frame)
+            frame.pack(fill=tk.X, pady=5)
+
+            ttk.Label(frame, text=label, width=15, anchor=tk.W,
+                      font=("SimHei", 11)).pack(side=tk.LEFT)
+            ttk.Label(frame, text=value, anchor=tk.W, font=("SimHei", 11, "bold"),
+                      foreground=color if i == len(metrics) - 1 else "black").pack(side=tk.LEFT)
+
+        # 添加关闭按钮
+        ttk.Button(result_window, text="分析完整报告",
+                   command=self.show_full_report, font=("SimHei", 10)).pack(pady=10, padx=10,
+                                                                            side=tk.LEFT)
+        ttk.Button(result_window, text="关闭游戏",
+                   command=self.root.destroy, font=("SimHei", 10)).pack(pady=10, padx=10, side=tk.RIGHT)
+
+        self.add_log(f"游戏结束! 总利润: ¥{self.total_profit:,.2f}, 评级: {rating}")
+
+        # 禁用提交按钮
+        self.submit_btn.config(state=tk.DISABLED)
+
+    def show_full_report(self):
+        """显示完整分析报告"""
+        plt.rcParams['font.family'] = self.chinese_font.get_name()
+        plt.rcParams['axes.unicode_minus'] = False
+
+        report_window = tk.Toplevel(self.root)
+        report_window.title("供应链分析报告")
+        report_window.geometry("800x600")
+
+        # 创建报告框架
+        notebook = ttk.Notebook(report_window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 财务分析标签
+        finance_frame = ttk.Frame(notebook)
+        notebook.add(finance_frame, text="财务分析")
+
+        # 添加财务图表
+        fig1, ax1 = plt.subplots(figsize=(10, 6))
+        fig1.set_facecolor('#f5f9fc')
+        ax1.set_facecolor('#f0f5fa')
+
+        days = list(range(1, len(self.profit_history) + 1))
+
+        # 利润和收入图表
+        ax1.bar(days, self.profit_history, color=['g' if p >= 0 else 'r' for p in self.profit_history])
+        if self.chinese_font:
+            ax1.set_xlabel('天数', fontproperties=self.chinese_font)
+            ax1.set_ylabel('利润 (¥)', color='black', fontproperties=self.chinese_font)
+            ax1.set_title('每日利润趋势', fontsize=12, fontproperties=self.chinese_font)
+        else:
+            ax1.set_xlabel('天数')
+            ax1.set_ylabel('利润 (¥)', color='black')
+            ax1.set_title('每日利润趋势', fontsize=12)
+
+        ax1.grid(True, linestyle='--', alpha=0.7)
+        ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+        canvas1 = FigureCanvasTkAgg(fig1, master=finance_frame)
+        canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # 市场分析标签
+        market_frame = ttk.Frame(notebook)
+        notebook.add(market_frame, text="市场分析")
+
+        # 添加市场份额图表
+        fig2, ax2 = plt.subplots(figsize=(10, 6))
+        fig2.set_facecolor('#f5f9fc')
+        ax2.set_facecolor('#f0f5fa')
+
+        market_days = list(range(1, len(self.market_share) + 1))
+        ax2.plot(market_days, [m * 100 for m in self.market_share], 'o-', color='#3498db')
+
+        if self.chinese_font:
+            ax2.set_xlabel('天数', fontproperties=self.chinese_font)
+            ax2.set_ylabel('市场份额 (%)', fontproperties=self.chinese_font)
+            ax2.set_title('市场份额变化趋势', fontsize=12, fontproperties=self.chinese_font)
+        else:
+            ax2.set_xlabel('天数')
+            ax2.set_ylabel('市场份额 (%)')
+            ax2.set_title('市场份额变化趋势', fontsize=12)
+
+        ax2.grid(True, linestyle='--', alpha=0.7)
+        ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+        canvas2 = FigureCanvasTkAgg(fig2, master=market_frame)
+        canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # 供应链分析标签
+        supply_frame = ttk.Frame(notebook)
+        notebook.add(supply_frame, text="供应链分析")
+
+        # 添加供应链指标
+        supply_metrics = [
+            ("供应商可靠性:", f"{self.supplier_reliability}/100"),
+            ("物流效率:", f"{self.logistics_efficiency}/100"),
+            ("供应商关系:", f"{self.supplier_relationship}/100"),
+            ("最终库存:", f"{self.inventory}只"),
+            ("政府拦截次数:", f"{len(self.interception_history)}次"),
+            ("总拦截量:", f"{sum(i[0] for i in self.interception_history)}只")
+        ]
+
+        for i, (label, value) in enumerate(supply_metrics):
+            frame = ttk.Frame(supply_frame)
+            frame.pack(fill=tk.X, pady=10)
+
+            ttk.Label(frame, text=label, width=20, anchor=tk.W,
+                      font=("SimHei", 11)).pack(side=tk.LEFT)
+            ttk.Label(frame, text=value, anchor=tk.W, font=("SimHei", 11)).pack(side=tk.LEFT)
+
+        # 添加雷达图展示供应链能力
+        fig3 = plt.Figure(figsize=(8, 6))
+        ax3 = fig3.add_subplot(111, polar=True)
+        fig3.set_facecolor('#f5f9fc')
+
+        categories = ['供应商可靠性', '物流效率', '库存管理', '市场响应', '资金效率']
+        values = [
+            self.supplier_reliability,
+            self.logistics_efficiency,
+            min(100, self.inventory / 100),
+            100 - self.competition_level,
+            min(100, self.total_profit / 500)
+        ]
+
+        N = len(categories)
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        angles += angles[:1]
+
+        values += values[:1]
+        ax3.plot(angles, values, 'o-', linewidth=2, color='#3498db')
+        ax3.fill(angles, values, alpha=0.25, color='#3498db')
+
+        ax3.set_xticks(angles[:-1])
+        ax3.set_xticklabels(categories)
+        ax3.set_yticks([20, 40, 60, 80, 100])
+
+        if self.chinese_font:
+            ax3.set_title('供应链能力评估', fontsize=12, pad=20, fontproperties=self.chinese_font)
+        else:
+            ax3.set_title('供应链能力评估', fontsize=12, pad=20)
+
+        canvas3 = FigureCanvasTkAgg(fig3, master=supply_frame)
+        canvas3.get_tk_widget().pack(fill=tk.BOTH, expand=True, pady=10)
+
+    def run(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    game = SupplyChainGame()
+    game.run()
